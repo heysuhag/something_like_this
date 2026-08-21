@@ -1,0 +1,10 @@
+fastapi
+uvicorn[standard]
+python-multipart
+pydantic
+pydantic-settings
+openai
+anthropic
+python-dotenv
+pandas
+pyyaml

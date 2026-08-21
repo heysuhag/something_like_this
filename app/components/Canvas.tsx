@@ -4,6 +4,7 @@ import { useState } from "react";
 import dynamic from "next/dynamic";
 import "@excalidraw/excalidraw/index.css";
 import type { ExcalidrawImperativeAPI } from "@excalidraw/excalidraw/types";
+import type { ExcalidrawElementSkeleton } from "@excalidraw/excalidraw/data/transform";
 
 const Excalidraw = dynamic(
   () => import("@excalidraw/excalidraw").then((mod) => mod.Excalidraw),
@@ -11,6 +12,21 @@ const Excalidraw = dynamic(
 );
 
 const REFINE_URL = "http://localhost:8000/refine";
+const VARIANT_SPACING = 1000;
+const VARIANT_MARGIN = 100;
+
+type RefineResponse = {
+  variants: { elements: Record<string, unknown>[] }[];
+};
+
+// Our backend serializes unset optional fields as explicit `null` (Pydantic's
+// behavior), but Excalidraw's skeleton converter expects them omitted rather
+// than present-as-null. Drop null values so only real fields remain.
+function stripNulls(obj: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(obj).filter(([, value]) => value !== null),
+  );
+}
 
 export default function Canvas() {
   const [excalidrawAPI, setExcalidrawAPI] =
@@ -63,7 +79,7 @@ export default function Canvas() {
 
   async function handleRefine() {
     const blob = await getExportBlob();
-    if (!blob) return;
+    if (!blob || !excalidrawAPI) return;
 
     setIsRefining(true);
     setRefineError(null);
@@ -80,6 +96,31 @@ export default function Canvas() {
       if (!response.ok) {
         throw new Error(`Backend responded with ${response.status}`);
       }
+
+      const data = (await response.json()) as RefineResponse;
+      const { convertToExcalidrawElements, getCommonBounds } = await import(
+        "@excalidraw/excalidraw"
+      );
+
+      const existingElements = excalidrawAPI.getSceneElements();
+      const startX =
+        existingElements.length > 0
+          ? getCommonBounds(existingElements)[2] + VARIANT_MARGIN
+          : 0;
+
+      const generatedElements = data.variants.flatMap((variant, i) =>
+        convertToExcalidrawElements(
+          variant.elements.map((el) => {
+            const cleaned = stripNulls(el);
+            const x = typeof cleaned.x === "number" ? cleaned.x : 0;
+            return { ...cleaned, x: startX + x + i * VARIANT_SPACING };
+          }) as ExcalidrawElementSkeleton[],
+        ),
+      );
+
+      excalidrawAPI.updateScene({
+        elements: [...existingElements, ...generatedElements],
+      });
     } catch (error) {
       setRefineError(error instanceof Error ? error.message : String(error));
     } finally {
